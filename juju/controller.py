@@ -5,8 +5,8 @@ from . import errors
 from . import tag
 from . import utils
 from .client import client
-from .client import connection
 from .client.jujudata import JujuData
+from .client import connector
 from .model import Model
 from .user import User
 
@@ -14,57 +14,48 @@ log = logging.getLogger(__name__)
 
 
 class Controller(object):
-    def __init__(self, loop=None,
-                 max_frame_size=connection.Connection.DEFAULT_FRAME_SIZE):
+    def __init__(self, loop=None, max_frame_size=None, bakery_client=None):
         """Instantiate a new Controller.
 
         One of the connect_* methods will need to be called before this
         object can be used for anything interesting.
 
         :param loop: an asyncio event loop
-
+        :param max_frame_size: See
+            `juju.client.connection.Connection.MAX_FRAME_SIZE`
+        :param bakery_client httpbakery.Client: The bakery client to use
+            for macaroon authorization.
         """
-        self.loop = loop or asyncio.get_event_loop()
-        self.max_frame_size = None
-        self.connection = None
-        self.controller_name = None
+        self._connector = connector.Connector(
+            loop=loop,
+            max_frame_size=max_frame_size,
+            bakery_client=bakery_client,
+        )
 
-    async def connect(
-            self, endpoint, username, password, cacert=None, macaroons=None):
-        """Connect to an arbitrary Juju controller.
-
+    async def connect(self, controller_name=None):
+        """Connect to a Juju controller by name. If controller_name
+        is empty, connect to the current controller.
         """
-        self.connection = await connection.Connection.connect(
-            endpoint, None, username, password, cacert, macaroons,
-            max_frame_size=self.max_frame_size)
+        await self._connector.connect_controller(controller_name)
 
-    async def connect_current(self):
-        """Connect to the current Juju controller.
+    def is_connected(self):
+        """Reports whether the Controller is currently connected."""
+        return self._connector.is_connected()
 
-        """
-        jujudata = JujuData()
-        controller_name = jujudata.current_controller()
-        if not controller_name:
-            raise errors.JujuConnectionError('No current controller')
-        return await self.connect_controller(controller_name)
+    def connection(self):
+        """Return the current Connection object. It raises an exception
+        if the Controller is disconnected"""
+        return self._connector.connection()
 
-    async def connect_controller(self, controller_name):
-        """Connect to a Juju controller by name.
-
-        """
-        self.connection = (
-            await connection.Connection.connect_controller(
-                controller_name, max_frame_size=self.max_frame_size))
-        self.controller_name = controller_name
+    @property
+    def controller_name(self):
+        return self._connector.controller_name
 
     async def disconnect(self):
         """Shut down the watcher task and close websockets.
 
         """
-        if self.connection and self.connection.is_open:
-            log.debug('Closing controller connection')
-            await self.connection.close()
-            self.connection = None
+        await self._connector.disconnect()
 
     async def add_credential(self, name=None, credential=None, cloud=None,
                              owner=None):
@@ -85,7 +76,7 @@ class Controller(object):
             cloud = await self.get_cloud()
 
         if not owner:
-            owner = self.connection.info['user-info']['identity']
+            owner = self.connection().info['user-info']['identity']
 
         if credential and not name:
             raise errors.JujuError('Name must be provided for credential')
@@ -97,7 +88,7 @@ class Controller(object):
                     'Unable to find credential: {}'.format(name))
 
         log.debug('Uploading credential %s', name)
-        cloud_facade = client.CloudFacade.from_connection(self.connection)
+        cloud_facade = client.CloudFacade.from_connection(self.connection())
         await cloud_facade.UpdateCredentials([
             client.UpdateCloudCredential(
                 tag=tag.credential(cloud, tag.untag('user-', owner), name),
@@ -121,12 +112,12 @@ class Controller(object):
             the current user.
         :param dict config: Model configuration.
         :param str region: Region in which to create the model.
-
+        :return Model: A connection to the newly created model.
         """
         model_facade = client.ModelManagerFacade.from_connection(
-            self.connection)
+            self.connection())
 
-        owner = owner or self.connection.info['user-info']['identity']
+        owner = owner or self.connection().info['user-info']['identity']
         cloud_name = cloud_name or await self.get_cloud()
 
         try:
@@ -153,7 +144,7 @@ class Controller(object):
         if not config or 'authorized-keys' not in config:
             config = config or {}
             config['authorized-keys'] = await utils.read_ssh_key(
-                loop=self.loop)
+                loop=self._connector.loop)
 
         model_info = await model_facade.CreateModel(
             tag.cloud(cloud_name),
@@ -166,13 +157,14 @@ class Controller(object):
 
         model = Model()
         await model.connect(
-            self.connection.endpoint,
-            model_info.uuid,
-            self.connection.username,
-            self.connection.password,
-            self.connection.cacert,
-            self.connection.macaroons,
-            loop=self.loop,
+            self.connection().endpoint,
+            uuid=model_info.uuid,
+            username=self.connection().username,
+            password=self.connection().password,
+            cacert=self.connection().cacert,
+            loop=self._connector.loop,
+            bakery_client=self._connector.bakery_client,
+            max_frame_size=self._connector.max_frame_size,
         )
 
         return model
@@ -188,7 +180,7 @@ class Controller(object):
                   for model in models]
 
         model_facade = client.ModelManagerFacade.from_connection(
-            self.connection)
+            self.connection())
 
         log.debug(
             'Destroying model%s %s',
@@ -212,7 +204,7 @@ class Controller(object):
         """
         if not display_name:
             display_name = username
-        user_facade = client.UserManagerFacade.from_connection(self.connection)
+        user_facade = client.UserManagerFacade.from_connection(self.connection())
         users = [client.AddUser(display_name=display_name,
                                 username=username,
                                 password=password)]
@@ -223,7 +215,7 @@ class Controller(object):
         """Remove a user from this controller.
         """
         client_facade = client.UserManagerFacade.from_connection(
-            self.connection)
+            self.connection())
         user = tag.user(username)
         await client_facade.RemoveUser([client.Entity(user)])
 
@@ -234,7 +226,7 @@ class Controller(object):
         :param str password: New password
 
         """
-        user_facade = client.UserManagerFacade.from_connection(self.connection)
+        user_facade = client.UserManagerFacade.from_connection(self.connection())
         entity = client.EntityPassword(password, tag.user(username))
         return await user_facade.SetPassword([entity])
 
@@ -246,7 +238,7 @@ class Controller(object):
 
         """
         controller_facade = client.ControllerFacade.from_connection(
-            self.connection)
+            self.connection())
         return await controller_facade.DestroyController(destroy_all_models)
 
     async def disable_user(self, username):
@@ -255,7 +247,7 @@ class Controller(object):
         :param str username: Username
 
         """
-        user_facade = client.UserManagerFacade.from_connection(self.connection)
+        user_facade = client.UserManagerFacade.from_connection(self.connection())
         entity = client.Entity(tag.user(username))
         return await user_facade.DisableUser([entity])
 
@@ -263,7 +255,7 @@ class Controller(object):
         """Re-enable a previously disabled user.
 
         """
-        user_facade = client.UserManagerFacade.from_connection(self.connection)
+        user_facade = client.UserManagerFacade.from_connection(self.connection())
         entity = client.Entity(tag.user(username))
         return await user_facade.EnableUser([entity])
 
@@ -278,7 +270,7 @@ class Controller(object):
         """
         Get the name of the cloud that this controller lives on.
         """
-        cloud_facade = client.CloudFacade.from_connection(self.connection)
+        cloud_facade = client.CloudFacade.from_connection(self.connection())
 
         result = await cloud_facade.Clouds()
         cloud = list(result.clouds.keys())[0]  # only lives on one cloud
@@ -286,7 +278,7 @@ class Controller(object):
 
     async def _model_uuids(self, all_=False, username=None):
         controller_facade = client.ControllerFacade.from_connection(
-            self.connection)
+            self.connection())
         for attempt in (1, 2, 3):
             try:
                 response = await controller_facade.AllModels()
@@ -297,7 +289,7 @@ class Controller(object):
                 # see: https://bugs.launchpad.net/juju/+bug/1721786
                 if 'has been removed' not in e.message or attempt == 3:
                     raise
-                await asyncio.sleep(attempt, loop=self.loop)
+                await asyncio.sleep(attempt, loop=self._connector.loop)
 
     async def list_models(self, all_=False, username=None):
         """Return list of names of the available models on this controller.
@@ -357,13 +349,13 @@ class Controller(object):
 
         model = Model()
         await model.connect(
-            self.connection.endpoint,
+            self.connection().endpoint,
             name_or_uuid,
-            self.connection.username,
-            self.connection.password,
-            self.connection.cacert,
-            self.connection.macaroons,
-            loop=self.loop,
+            self.connection().username,
+            self.connection().password,
+            self.connection().cacert,
+            self.connection().macaroons,
+            loop=self._connector.loop,
         )
         return model
 
@@ -374,7 +366,7 @@ class Controller(object):
         :returns: A :class:`~juju.user.User` instance
         """
         client_facade = client.UserManagerFacade.from_connection(
-            self.connection)
+            self.connection())
         user = tag.user(username)
         args = [client.Entity(user)]
         try:
@@ -396,7 +388,7 @@ class Controller(object):
         :returns: A list of :class:`~juju.user.User` instances
         """
         client_facade = client.UserManagerFacade.from_connection(
-            self.connection)
+            self.connection())
         response = await client_facade.UserInfo(None, include_disabled)
         return [User(self, r.result) for r in response.results]
 
@@ -408,7 +400,7 @@ class Controller(object):
 
         """
         controller_facade = client.ControllerFacade.from_connection(
-            self.connection)
+            self.connection())
         user = tag.user(username)
         await self.revoke(username)
         changes = client.ModifyControllerAccess(acl, 'grant', user)
@@ -421,7 +413,7 @@ class Controller(object):
 
         """
         controller_facade = client.ControllerFacade.from_connection(
-            self.connection)
+            self.connection())
         user = tag.user(username)
         changes = client.ModifyControllerAccess('login', 'revoke', user)
         return await controller_facade.ModifyControllerAccess([changes])

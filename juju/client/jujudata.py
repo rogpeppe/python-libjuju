@@ -1,9 +1,11 @@
 import os
 import yaml
+import pathlib
 import io
 
 from juju import tag
 import juju.client.client as jujuclient
+from juju.client.gocookies import GoCookieJar
 from juju.errors import JujuError
 
 
@@ -127,3 +129,11 @@ class JujuData:
             data = yaml.safe_load(f)
             self._loaded[filename] = data
             return data.get(key)
+
+    def cookies_for_controller(self, controller_name):
+        f = pathlib.Path(self.path) / 'cookies' / controller_name
+        if not f.exists():
+            f = pathlib.Path('~/.go-cookies').expanduser()
+            # TODO if neither cookie file exists, where should
+            # we create the cookies?
+        return GoCookieJar(str(f))

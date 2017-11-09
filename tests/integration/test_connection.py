@@ -8,9 +8,9 @@ from .. import base
 
 @base.bootstrapped
 @pytest.mark.asyncio
-async def test_connect_current(event_loop):
+async def test_connect(event_loop):
     async with base.CleanModel():
-        conn = await Connection.connect_current()
+        conn = await Connection.connect()
 
         assert isinstance(conn, Connection)
         await conn.close()
@@ -21,7 +21,7 @@ async def test_connect_current(event_loop):
 async def test_monitor(event_loop):
 
     async with base.CleanModel():
-        conn = await Connection.connect_current()
+        conn = await Connection.connect()
 
         assert conn.monitor.status == 'connected'
         await conn.close()

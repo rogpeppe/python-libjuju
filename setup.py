@@ -34,6 +34,7 @@ setup(
         'pyyaml',
         'theblues',
         'pyRFC3339>=1.0,<2.0',
+        'macaroonbakery<1.0',
     ],
     include_package_data=True,
     maintainer='Juju Ecosystem Engineering',

@@ -118,7 +118,7 @@ def test_get_series():
 
 class TestContextManager(asynctest.TestCase):
     @asynctest.patch('juju.model.Model.disconnect')
-    @asynctest.patch('juju.model.Model.connect_current')
+    @asynctest.patch('juju.model.Model.connect')
     async def test_normal_use(self, mock_connect, mock_disconnect):
         from juju.model import Model
 
@@ -129,7 +129,7 @@ class TestContextManager(asynctest.TestCase):
         self.assertTrue(mock_disconnect.called)
 
     @asynctest.patch('juju.model.Model.disconnect')
-    @asynctest.patch('juju.model.Model.connect_current')
+    @asynctest.patch('juju.model.Model.connect')
     async def test_exception(self, mock_connect, mock_disconnect):
         from juju.model import Model
 
@@ -143,7 +143,7 @@ class TestContextManager(asynctest.TestCase):
         self.assertTrue(mock_connect.called)
         self.assertTrue(mock_disconnect.called)
 
-    @asynctest.patch('juju.client.connection.JujuData.current_controller')
+    @asynctest.patch('juju.client.jujudata.JujuData.current_controller')
     async def test_no_current_connection(self, mock_current_controller):
         from juju.model import Model
         from juju.errors import JujuConnectionError

@@ -21,7 +21,7 @@ import theblues.errors
 
 from . import tag, utils
 from .client import client
-from .client import connection
+from .client import connector
 from .client.client import ConfigValue
 from .constraints import parse as parse_constraints, normalize_key
 from .delta import get_entity_delta
@@ -33,7 +33,7 @@ from .placement import parse as parse_placement
 log = logging.getLogger(__name__)
 
 
-class _Observer(object):
+class _Observer:
     """Wrapper around an observer callable.
 
     This wrapper allows filter criteria to be associated with the
@@ -77,7 +77,7 @@ class _Observer(object):
         return True
 
 
-class ModelObserver(object):
+class ModelObserver:
     """
     Base class for creating observers that react to changes in a model.
     """
@@ -100,7 +100,7 @@ class ModelObserver(object):
         pass
 
 
-class ModelState(object):
+class ModelState:
     """Holds the state of the model, including the delta history of all
     entities in the model.
 
@@ -209,7 +209,7 @@ class ModelState(object):
             connected=connected)
 
 
-class ModelEntity(object):
+class ModelEntity:
     """An object in the Model tree"""
 
     def __init__(self, entity_id, model, history_index=-1, connected=True):
@@ -380,90 +380,85 @@ class ModelEntity(object):
         return self.model.state.get_entity(self.entity_type, self.entity_id)
 
 
-class Model(object):
+class Model:
     """
     The main API for interacting with a Juju model.
     """
-    def __init__(self, loop=None,
-                 max_frame_size=connection.Connection.DEFAULT_FRAME_SIZE):
-        """Instantiate a new connected Model.
+    def __init__(self, loop=None, max_frame_size=None, bakery_client=None):
+        """Instantiate a new Model.
+
+        The connect method will need to be called before this
+        object can be used for anything interesting.
 
         :param loop: an asyncio event loop
         :param max_frame_size: See
             `juju.client.connection.Connection.MAX_FRAME_SIZE`
-
+        :param bakery_client httpbakery.Client: The bakery client to use
+            for macaroon authorization.
         """
-        self.loop = loop or asyncio.get_event_loop()
-        self.max_frame_size = max_frame_size
-        self.connection = None
-        self.observers = weakref.WeakValueDictionary()
+        self._connector = connector.Connector(
+            loop=loop,
+            max_frame_size=max_frame_size,
+            bakery_client=bakery_client,
+        )
+        self._observers = weakref.WeakValueDictionary()
         self.state = ModelState(self)
-        self.info = None
-        self._watch_stopping = asyncio.Event(loop=self.loop)
-        self._watch_stopped = asyncio.Event(loop=self.loop)
-        self._watch_received = asyncio.Event(loop=self.loop)
-        self._charmstore = CharmStore(self.loop)
+        self._info = None
+        self._watch_stopping = asyncio.Event(loop=self._connector.loop)
+        self._watch_stopped = asyncio.Event(loop=self._connector.loop)
+        self._watch_received = asyncio.Event(loop=self._connector.loop)
+        self._charmstore = CharmStore(self._connector.loop)
+
+    def is_connected(self):
+        """Reports whether the Model is currently connected."""
+        return self._connector.is_connected()
+
+    def connection(self):
+        """Return the current Connection object. It raises an exception
+        if the Model is disconnected"""
+        return self._connector.connection()
 
     async def __aenter__(self):
-        await self.connect_current()
+        # TODO is this actually useful to have?
+        await self.connect()
         return self
 
     async def __aexit__(self, exc_type, exc, tb):
         await self.disconnect()
 
-        if exc_type is not None:
-            return False
-
-    async def connect(self, *args, **kw):
-        """Connect to an arbitrary Juju model.
-
-        args and kw are passed through to Connection.connect()
-
-        """
-        if 'loop' not in kw:
-            kw['loop'] = self.loop
-        if 'max_frame_size' not in kw:
-            kw['max_frame_size'] = self.max_frame_size
-        self.connection = await connection.Connection.connect(*args, **kw)
-        await self._after_connect()
-
-    async def connect_current(self):
-        """Connect to the current Juju model.
-
-        """
-        self.connection = await connection.Connection.connect_current(
-            self.loop, max_frame_size=self.max_frame_size)
-        await self._after_connect()
-
-    async def connect_model(self, model_name):
+    async def connect(self, model_name=None):
         """Connect to a specific Juju model by name.
+        If model_name is None or empty, connect to the current
+        model.
 
         :param model_name:  Format [controller:][user/]model
 
         """
-        self.connection = await connection.Connection.connect_model(
-            model_name, self.loop, self.max_frame_size)
-        await self._after_connect()
-
-    async def _after_connect(self):
-        """Run initialization steps after connecting to websocket.
-
-        """
+        await self._connector.connect_model(model_name)
         self._watch()
+
+        # Wait for the first packet of data from the AllWatcher,
+        # which contains all information on the model.
+        # TODO this means that we can't do anything until
+        # we've received all the model data, which might be
+        # a whole load of unneeded data if all the client wants
+        # to do is make one RPC call.
         await self._watch_received.wait()
+
         await self.get_info()
 
     async def disconnect(self):
         """Shut down the watcher task and close websockets.
 
         """
-        if self.connection and self.connection.is_open:
-            log.debug('Stopping watcher task')
-            self._watch_stopping.set()
-            await self._watch_stopped.wait()
-            log.debug('Closing model connection')
-            await self.connection.close()
-            self.connection = None
+        if not self.is_connected():
+            return
+
+        log.debug('Stopping watcher task')
+        self._watch_stopping.set()
+        await self._watch_stopped.wait()
+        log.debug('Closing model connection')
+        await self._connector.disconnect()
 
     async def add_local_charm_dir(self, charm_dir, series):
         """Upload a local charm to the model.
@@ -480,7 +475,7 @@ class Model(object):
         with fh:
             func = partial(
                 self.add_local_charm, fh, series, os.stat(fh.name).st_size)
-            charm_url = await self.loop.run_in_executor(None, func)
+            charm_url = await self._connector.loop.run_in_executor(None, func)
 
         log.debug('Uploaded local charm: %s -> %s', charm_dir, charm_url)
         return charm_url
@@ -505,7 +500,7 @@ class Model(object):
            instead.
 
         """
-        conn, headers, path_prefix = self.connection.https_connection()
+        conn, headers, path_prefix = self.connection().https_connection()
         path = "%s/charms?series=%s" % (path_prefix, series)
         headers['Content-Type'] = 'application/zip'
         if size:
@@ -552,10 +547,10 @@ class Model(object):
         """
         async def _block():
             while not all(c() for c in conditions):
-                if not (self.connection and self.connection.is_open):
+                if not (self.is_connected() and self.connection().is_open):
                     raise websockets.ConnectionClosed(1006, 'no reason')
-                await asyncio.sleep(wait_period, loop=self.loop)
-        await asyncio.wait_for(_block(), timeout, loop=self.loop)
+                await asyncio.sleep(wait_period, loop=self._connector.loop)
+        await asyncio.wait_for(_block(), timeout, loop=self._connector.loop)
 
     @property
     def applications(self):
@@ -594,7 +589,7 @@ class Model(object):
         explicit call to this method.
 
         """
-        facade = client.ClientFacade.from_connection(self.connection)
+        facade = client.ClientFacade.from_connection(self.connection())
 
         self.info = await facade.ModelInfo()
         log.debug('Got ModelInfo: %s', vars(self.info))
@@ -639,7 +634,7 @@ class Model(object):
         """
         observer = _Observer(
             callable_, entity_type, action, entity_id, predicate)
-        self.observers[observer] = callable_
+        self._observers[observer] = callable_
 
     def _watch(self):
         """Start an asynchronous watch against this model.
@@ -650,13 +645,13 @@ class Model(object):
         async def _all_watcher():
             try:
                 allwatcher = client.AllWatcherFacade.from_connection(
-                    self.connection)
+                    self.connection())
                 while not self._watch_stopping.is_set():
                     try:
                         results = await utils.run_with_interrupt(
                             allwatcher.Next(),
                             self._watch_stopping,
-                            self.loop)
+                            self._connector.loop)
                     except JujuAPIError as e:
                         if 'watcher was stopped' not in str(e):
                             raise
@@ -673,12 +668,12 @@ class Model(object):
                         del allwatcher.Id
                         continue
                     except websockets.ConnectionClosed:
-                        monitor = self.connection.monitor
+                        monitor = self.connection().monitor
                         if monitor.status == monitor.ERROR:
                             # closed unexpectedly, try to reopen
                             log.warning(
                                 'Watcher: connection closed, reopening')
-                            await self.connection.reconnect()
+                            await self.connection().reconnect()
                             if monitor.status != monitor.CONNECTED:
                                 # reconnect failed; abort and shutdown
                                 log.error('Watcher: automatic reconnect '
@@ -709,7 +704,7 @@ class Model(object):
         self._watch_received.clear()
         self._watch_stopping.clear()
         self._watch_stopped.clear()
-        self.loop.create_task(_all_watcher())
+        self._connector.loop.create_task(_all_watcher())
 
     async def _notify_observers(self, delta, old_obj, new_obj):
         """Call observing callbacks, notifying them of a change in model state
@@ -729,10 +724,10 @@ class Model(object):
             'Model changed: %s %s %s',
             delta.entity, delta.type, delta.get_id())
 
-        for o in self.observers:
+        for o in self._observers:
             if o.cares_about(delta):
                 asyncio.ensure_future(o(delta, old_obj, new_obj, self),
-                                      loop=self.loop)
+                                      loop=self._connector.loop)
 
     async def _wait(self, entity_type, entity_id, action, predicate=None):
         """
@@ -749,7 +744,7 @@ class Model(object):
             has a 'completed' status. See the _Observer class for details.
 
         """
-        q = asyncio.Queue(loop=self.loop)
+        q = asyncio.Queue(loop=self._connector.loop)
 
         async def callback(delta, old, new, model):
             await q.put(delta.get_id())
@@ -870,7 +865,7 @@ class Model(object):
             params.series = series
 
         # Submit the request.
-        client_facade = client.ClientFacade.from_connection(self.connection)
+        client_facade = client.ClientFacade.from_connection(self.connection())
         results = await client_facade.AddMachines([params])
         error = results.machines[0].error
         if error:
@@ -886,7 +881,7 @@ class Model(object):
         :param str relation2: '<application>[:<relation_name>]'
 
         """
-        app_facade = client.ApplicationFacade.from_connection(self.connection)
+        app_facade = client.ApplicationFacade.from_connection(self.connection())
 
         log.debug(
             'Adding relation %s <-> %s', relation1, relation2)
@@ -929,7 +924,7 @@ class Model(object):
         :param str key: The public ssh key
 
         """
-        key_facade = client.KeyManagerFacade.from_connection(self.connection)
+        key_facade = client.KeyManagerFacade.from_connection(self.connection())
         return await key_facade.AddKeys([key], user)
     add_ssh_keys = add_ssh_key
 
@@ -1087,7 +1082,7 @@ class Model(object):
             entity = await self.charmstore.entity(entity_url, channel=channel)
             entity_id = entity['Id']
 
-        client_facade = client.ClientFacade.from_connection(self.connection)
+        client_facade = client.ClientFacade.from_connection(self.connection())
 
         is_bundle = ((is_local and
                       (Path(entity_id) / 'bundle.yaml').exists()) or
@@ -1105,9 +1100,9 @@ class Model(object):
                 await asyncio.gather(*[
                     asyncio.ensure_future(
                         self._wait_for_new('application', app_name),
-                        loop=self.loop)
+                        loop=self._connector.loop)
                     for app_name in pending_apps
-                ], loop=self.loop)
+                ], loop=self._connector.loop)
             return [app for name, app in self.applications.items()
                     if name in handler.applications]
         else:
@@ -1168,7 +1163,7 @@ class Model(object):
             return None
 
         resources_facade = client.ResourcesFacade.from_connection(
-            self.connection)
+            self.connection())
         response = await resources_facade.AddPendingResources(
             tag.application(application),
             entity_url,
@@ -1191,7 +1186,7 @@ class Model(object):
                            default_flow_style=False)
 
         app_facade = client.ApplicationFacade.from_connection(
-            self.connection)
+            self.connection())
 
         app = client.ApplicationDeploy(
             charm_url=charm_url,
@@ -1223,7 +1218,7 @@ class Model(object):
         """Destroy units by name.
 
         """
-        app_facade = client.ApplicationFacade.from_connection(self.connection)
+        app_facade = client.ApplicationFacade.from_connection(self.connection())
 
         log.debug(
             'Destroying unit%s %s',
@@ -1268,7 +1263,7 @@ class Model(object):
             which have `source` and `value` attributes.
         """
         config_facade = client.ModelConfigFacade.from_connection(
-            self.connection
+            self.connection()
         )
         result = await config_facade.ModelGet()
         config = result.config
@@ -1289,7 +1284,7 @@ class Model(object):
         :param str acl: Access control ('read' or 'write')
 
         """
-        controller_conn = await self.connection.controller()
+        controller_conn = await self.connection().controller()
         model_facade = client.ModelManagerFacade.from_connection(
             controller_conn)
         user = tag.user(username)
@@ -1331,7 +1326,7 @@ class Model(object):
             else it's fingerprint
 
         """
-        key_facade = client.KeyManagerFacade.from_connection(self.connection)
+        key_facade = client.KeyManagerFacade.from_connection(self.connection())
         entity = {'tag': tag.model(self.info.uuid)}
         entities = client.Entities([entity])
         return await key_facade.ListKeys(entities, raw_ssh)
@@ -1404,7 +1399,7 @@ class Model(object):
         :param str user: Juju user to which the key is registered
 
         """
-        key_facade = client.KeyManagerFacade.from_connection(self.connection)
+        key_facade = client.KeyManagerFacade.from_connection(self.connection())
         key = base64.b64decode(bytes(key.strip().split()[1].encode('ascii')))
         key = hashlib.md5(key).hexdigest()
         key = ':'.join(a + b for a, b in zip(key[::2], key[1::2]))
@@ -1438,7 +1433,7 @@ class Model(object):
         :param str username: Username to revoke
 
         """
-        controller_conn = await self.connection.controller()
+        controller_conn = await self.connection().controller()
         model_facade = client.ModelManagerFacade.from_connection(
             controller_conn)
         user = tag.user(username)
@@ -1462,7 +1457,7 @@ class Model(object):
             `ConfigValue` instances, as returned by `get_config`.
         """
         config_facade = client.ModelConfigFacade.from_connection(
-            self.connection
+            self.connection()
         )
         for key, value in config.items():
             if isinstance(value, ConfigValue):
@@ -1511,7 +1506,7 @@ class Model(object):
         :param bool utc: Display time as UTC in RFC3339 format
 
         """
-        client_facade = client.ClientFacade.from_connection(self.connection)
+        client_facade = client.ClientFacade.from_connection(self.connection())
         return await client_facade.FullStatus(filters)
 
     def sync_tools(
@@ -1592,7 +1587,7 @@ class Model(object):
                   ', '.join(tags) if tags else "all units")
 
         metrics_facade = client.MetricsDebugFacade.from_connection(
-            self.connection)
+            self.connection())
 
         entities = [client.Entity(tag) for tag in tags]
         metrics_result = await metrics_facade.GetMetrics(entities)
@@ -1628,7 +1623,7 @@ def get_charm_series(path):
     return series[0] if series else None
 
 
-class BundleHandler(object):
+class BundleHandler:
     """
     Handle bundles by using the API to translate bundle YAML into a plan of
     steps and then dispatching each of those using the API.
@@ -1643,11 +1638,11 @@ class BundleHandler(object):
             app_units = self._units_by_app.setdefault(unit.application, [])
             app_units.append(unit_name)
         self.client_facade = client.ClientFacade.from_connection(
-            model.connection)
+            model.connection())
         self.app_facade = client.ApplicationFacade.from_connection(
-            model.connection)
+            model.connection())
         self.ann_facade = client.AnnotationsFacade.from_connection(
-            model.connection)
+            model.connection())
 
     async def _handle_local_charms(self, bundle):
         """Search for references to local charms (i.e. filesystem paths)
@@ -1925,7 +1920,7 @@ class BundleHandler(object):
         return await entity.set_annotations(annotations)
 
 
-class CharmStore(object):
+class CharmStore:
     """
     Async wrapper around theblues.charmstore.CharmStore
     """
@@ -1957,7 +1952,7 @@ class CharmStore(object):
         return wrapper
 
 
-class CharmArchiveGenerator(object):
+class CharmArchiveGenerator:
     """
     Create a Zip archive of a local charm directory for upload to a controller.
 
