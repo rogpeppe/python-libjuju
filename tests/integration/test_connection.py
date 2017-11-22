@@ -6,23 +6,14 @@ from juju.client import client
 from .. import base
 
 
-@base.bootstrapped
-@pytest.mark.asyncio
-async def test_connect(event_loop):
-    async with base.CleanModel():
-        conn = await Connection.connect()
-
-        assert isinstance(conn, Connection)
-        await conn.close()
 
 
 @base.bootstrapped
 @pytest.mark.asyncio
 async def test_monitor(event_loop):
 
-    async with base.CleanModel():
-        conn = await Connection.connect()
-
+    async with base.CleanModel() as model:
+        conn = model.connection()
         assert conn.monitor.status == 'connected'
         await conn.close()
 
@@ -34,7 +25,9 @@ async def test_monitor(event_loop):
 async def test_monitor_catches_error(event_loop):
 
     async with base.CleanModel() as model:
-        conn = model.connection
+        print('CleanModel returned model type {}'.format(type(model)))
+        conn = model.connection()
+        print('connection type is {}'.format(conn))
 
         assert conn.monitor.status == 'connected'
         try:
@@ -57,7 +50,7 @@ async def test_full_status(event_loop):
             channel='stable',
         )
 
-        c = client.ClientFacade.from_connection(model.connection)
+        c = client.ClientFacade.from_connection(model.connection())
 
         await c.FullStatus(None)
 
@@ -66,15 +59,16 @@ async def test_full_status(event_loop):
 @pytest.mark.asyncio
 async def test_reconnect(event_loop):
     async with base.CleanModel() as model:
+        old_connn = model.connection()
         conn = await Connection.connect(
-            model.connection.endpoint,
-            model.connection.uuid,
-            model.connection.username,
-            model.connection.password,
-            model.connection.cacert,
-            model.connection.macaroons,
-            model.connection.loop,
-            model.connection.max_frame_size)
+            old_conn.endpoint,
+            old_conn.uuid,
+            old_conn.username,
+            old_conn.password,
+            old_conn.cacert,
+            old_conn.macaroons,
+            old_conn.loop,
+            old_conn.max_frame_size)
         try:
             await asyncio.sleep(0.1)
             assert conn.is_open

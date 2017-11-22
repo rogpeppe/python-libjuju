@@ -5,7 +5,7 @@ import uuid
 from .. import base
 from juju.controller import Controller
 from juju.errors import JujuAPIError
-
+from juju.client.connection import Connection
 
 @base.bootstrapped
 @pytest.mark.asyncio
@@ -57,14 +57,18 @@ async def test_change_user_password(event_loop):
         username = 'test-password{}'.format(uuid.uuid4())
         user = await controller.add_user(username)
         await user.set_password('password')
+        # Check that we can connect with the new password.
+        new_connection = None
         try:
-            new_controller = Controller()
-            await new_controller.connect(
-                controller.connection.endpoint, username, 'password')
+            endpoint, kwargs = controller.connection().connect_params()
+            kwargs['username'] = username
+            kwargs['password'] = 'password'
+            new_connection = await Connection.connect(endpoint, **kwargs)
         except JujuAPIError:
             raise AssertionError('Unable to connect with new password')
         finally:
-            await new_controller.disconnect()
+            if new_connection:
+                await new_connection.close()
 
 
 @base.bootstrapped

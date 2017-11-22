@@ -32,6 +32,10 @@ class Controller(object):
             bakery_client=bakery_client,
         )
 
+    @property
+    def loop(self):
+        return self._connector.loop
+
     async def connect(self, controller_name=None):
         """Connect to a Juju controller by name. If controller_name
         is empty, connect to the current controller.
@@ -156,16 +160,9 @@ class Controller(object):
         )
 
         model = Model()
-        await model.connect(
-            self.connection().endpoint,
-            uuid=model_info.uuid,
-            username=self.connection().username,
-            password=self.connection().password,
-            cacert=self.connection().cacert,
-            loop=self._connector.loop,
-            bakery_client=self._connector.bakery_client,
-            max_frame_size=self._connector.max_frame_size,
-        )
+        endpoint, kwargs = self.connection().connect_params()
+        kwargs['uuid'] = model_info.uuid
+        await model._connect_direct(endpoint, **kwargs)
 
         return model
 
@@ -339,24 +336,18 @@ class Controller(object):
         """Get a model by name or UUID.
 
         :param str model: Model name or UUID
-
+        :returns Model: Connected Model instance.
         """
         uuids = await self._model_uuids()
         if model in uuids:
-            name_or_uuid = uuids[model]
+            uuid = uuids[model]
         else:
-            name_or_uuid = model
+            uuid = model
 
         model = Model()
-        await model.connect(
-            self.connection().endpoint,
-            name_or_uuid,
-            self.connection().username,
-            self.connection().password,
-            self.connection().cacert,
-            self.connection().macaroons,
-            loop=self._connector.loop,
-        )
+        endpoint, kwargs = self.connection().connect_params()
+        kwargs['uuid'] = uuid
+        await model._connect_direct(endpoint, **kwargs)
         return model
 
     async def get_user(self, username):

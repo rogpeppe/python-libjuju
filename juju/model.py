@@ -228,7 +228,7 @@ class ModelEntity:
         self.model = model
         self._history_index = history_index
         self.connected = connected
-        self.connection = model.connection
+        self.connection = model.connection()
 
     def __repr__(self):
         return '<{} entity_id="{}">'.format(type(self).__name__,
@@ -413,6 +413,10 @@ class Model:
         """Reports whether the Model is currently connected."""
         return self._connector.is_connected()
 
+    @property
+    def loop(self):
+        return self._connector.loop
+
     def connection(self):
         """Return the current Connection object. It raises an exception
         if the Model is disconnected"""
@@ -434,7 +438,16 @@ class Model:
         :param model_name:  Format [controller:][user/]model
 
         """
+        awiat.self.disconnect()
         await self._connector.connect_model(model_name)
+        self._after_connect()
+ 
+    async def _connect_direct(self, *args, **kwargs):
+        await self.disconnect()
+        await self._connector.connect(*args, **kwargs)
+        await self._after_connect()
+        
+    async def _after_connect(self):
         self._watch()
 
         # Wait for the first packet of data from the AllWatcher,
@@ -459,6 +472,7 @@ class Model:
         await self._watch_stopped.wait()
         log.debug('Closing model connection')
         await self._connector.disconnect()
+        self.info = None
 
     async def add_local_charm_dir(self, charm_dir, series):
         """Upload a local charm to the model.

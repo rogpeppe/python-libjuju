@@ -100,7 +100,7 @@ class Connection:
     async def connect(
             cls,
             endpoint,
-            uuid,
+            uuid=None,
             username=None,
             password=None,
             cacert=None,
@@ -150,6 +150,7 @@ class Connection:
         self.ws = None
         self.endpoint = None
         self.cacert = None
+        self.info = None
 
         # Create that _Task objects but don't start the tasks yet.
         self._pinger_task = _Task(self._pinger, self.loop)
@@ -163,6 +164,12 @@ class Connection:
         self.max_frame_size = max_frame_size
         await self._connect_with_redirect([(endpoint, cacert)])
         return self
+
+    @property
+    def username(self):
+        if not self.usertag:
+            return None
+        return self.usertag[len('user-'):]
 
     @property
     def is_open(self):
@@ -285,8 +292,9 @@ class Connection:
                 # be cancelled when the pinger is cancelled by the reconnect,
                 # and we don't want the reconnect to be aborted halfway through
                 await asyncio.wait([self.reconnect()], loop=self.loop)
-        print('waiting for message {}'.format(json.dumps(msg)))
+        print('waiting for message {}'.format(outgoing))
         result = await self._recv(msg['request-id'])
+        print('received message {}'.format(result))
 
         if not result:
             return result
@@ -368,24 +376,34 @@ class Connection:
         as this one.
 
         """
-        return await Connection.connect(
-            endpoint=self.endpoint,
-            uuid=self.uuid,
-            usertag=self.usertag,
-            password=self.password,
-            cacert=self.cacert,
-            bakery_client=self.bakery_client,
-            loop=self.loop,
-            max_frame_size=self.max_frame_size,
-        )
+        endpoint, kwargs = self.connect_params()
+        
+        return await Connection.connect(endpoint, **kwargs)
 
+    def connect_params(self):
+        """Return a tuple of parameters suitable for passing to Connection.connect that
+        can be used to make a new connection to the same controller (and model
+        if specified. The first element in the returned tuple holds the endpoint argument; the other
+        holds a dict of the keyword args.
+        """
+        return (
+            self.endpoint, {
+                'uuid': self.uuid,
+                'username': self.username,
+                'password': self.password,
+                'cacert': self.cacert,
+                'bakery_client': self.bakery_client,
+                'loop': self.loop,
+                'max_frame_size': self.max_frame_size,
+            }
+        )
+                   
     async def controller(self):
         """Return a Connection to the controller at self.endpoint
         """
         return await Connection.connect(
-            endpoint=self.endpoint,
-            uuid=None,
-            usertag=self.usertag,
+            self.endpoint,
+            username=self.username,
             password=self.password,
             cacert=self.cacert,
             bakery_client=self.bakery_client,
@@ -437,6 +455,7 @@ class Connection:
                 print('login returned result type {}'.format(type(result)))
                 macaroonJSON = result.get('discharge-required')
                 if macaroonJSON is None:
+                    self.info = result['response']
                     success = True
                     return result
                 macaroon = bakery.Macaroon.from_dict(macaroonJSON)
@@ -485,7 +504,7 @@ class Connection:
         params = {}
         if self.usertag:
             params['auth-tag'] = self.usertag
-            params['password'] = self.password
+            params['credentials'] = self.password
         else:
             params['macaroons'] = macaroons_for_domain(self.bakery_client.cookies, self.endpoint)
 

@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import macaroonbakery.httpbakery as httpbakery
 
@@ -11,7 +12,7 @@ log = logging.getLogger('connector')
 class Connector:
     def __init__(self, loop=None, max_frame_size=None, bakery_client=None):
         self.max_frame_size = max_frame_size
-        self.loop = loop
+        self.loop = loop or asyncio.get_event_loop()
         self.bakery_client = bakery_client
         self._connection = None
         self.controller_name = None
@@ -90,7 +91,13 @@ class Connector:
         endpoint = controller['api-endpoints'][0]
         models = self.jujudata.models()[controller_name]
         account = self.jujudata.accounts()[controller_name]
-
+        
+        # TODO if there's no record for the required model name, connect
+        # to the controller to find out the model's uuid, then connect
+        # to that. This will let connect_model work with models that
+        # haven't necessarily synced with the local juju data,
+        # and also remove the need for base.CleanModel to
+        # patch JujuData.models with a mock.
         await self.connect(
             endpoint=endpoint,
             uuid=models['models'][model_name]['uuid'],
