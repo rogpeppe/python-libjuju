@@ -68,8 +68,8 @@ class TestModelState(unittest.TestCase):
         from juju.model import Model
         from juju.application import Application
 
-        loop = mock.MagicMock()
-        model = Model(loop=loop)
+        model = Model()
+        model._connector = mock.MagicMock()
         delta = _make_delta('application', 'add', dict(name='foo'))
 
         # test add

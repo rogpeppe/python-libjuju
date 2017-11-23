@@ -101,7 +101,7 @@ class Connector:
         await self.connect(
             endpoint=endpoint,
             uuid=models['models'][model_name]['uuid'],
-            username=account.get('username'),
+            username=account.get('user'),
             password=account.get('password'),
             cacert=controller.get('ca-cert'),
             bakery_client=self.bakery_client_for_controller(controller_name),

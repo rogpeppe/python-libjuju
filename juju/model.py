@@ -438,15 +438,15 @@ class Model:
         :param model_name:  Format [controller:][user/]model
 
         """
-        awiat.self.disconnect()
+        await self.disconnect()
         await self._connector.connect_model(model_name)
-        self._after_connect()
+        await self._after_connect()
  
     async def _connect_direct(self, *args, **kwargs):
         await self.disconnect()
         await self._connector.connect(*args, **kwargs)
         await self._after_connect()
-        
+
     async def _after_connect(self):
         self._watch()
 
@@ -1215,12 +1215,12 @@ class Model:
             storage=storage,
             placement=placement
         )
-
         result = await app_facade.Deploy([app])
         errors = [r.error.message for r in result.results if r.error]
         if errors:
             raise JujuError('\n'.join(errors))
-        return await self._wait_for_new('application', application)
+        new_app = await self._wait_for_new('application', application)
+        return new_app
 
     async def destroy(self):
         """Terminate all machines and resources for this model.

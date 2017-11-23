@@ -180,7 +180,6 @@ class Connection:
             purpose=ssl.Purpose.CLIENT_AUTH, cadata=cert)
 
     async def _open(self, endpoint, cacert):
-        print('Connection._open {}'.format(endpoint))
         if self.uuid:
             url = "wss://{}/model/{}/api".format(endpoint, self.uuid)
         else:
@@ -194,15 +193,11 @@ class Connection:
         ), url)
 
     async def close(self):
-        print('XXX close called')
         if not self.ws:
             return
         self.monitor.close_called.set()
-        print('waiting for pinger to stop')
         await self._pinger_task.stopped.wait()
-        print('waiting for receiver to stop')
         await self._receiver_task.stopped.wait()
-        print('closing websocket')
         await self.ws.close()
         self.ws = None
 
@@ -279,6 +274,7 @@ class Connection:
         if "version" not in msg:
             msg['version'] = self.facades[msg['type']]
         outgoing = json.dumps(msg, indent=2, cls=encoder)
+        print('{} -> {}'.format(id(self), outgoing))
         for attempt in range(3):
             try:
                 await self.ws.send(outgoing)
@@ -292,9 +288,8 @@ class Connection:
                 # be cancelled when the pinger is cancelled by the reconnect,
                 # and we don't want the reconnect to be aborted halfway through
                 await asyncio.wait([self.reconnect()], loop=self.loop)
-        print('waiting for message {}'.format(outgoing))
         result = await self._recv(msg['request-id'])
-        print('received message {}'.format(result))
+        print('{} <- {}'.format(id(self), result))
 
         if not result:
             return result
@@ -419,7 +414,7 @@ class Connection:
             return
         async with monitor.reconnecting:
             await self.close()
-            await self._connect_with_login([self.endpoint, self.cacert])
+            await self._connect_with_login([(self.endpoint, self.cacert)])
 
     async def _connect(self, endpoints):
         if len(endpoints) == 0:
@@ -452,7 +447,6 @@ class Connection:
             await self._connect(endpoints)
             for i in range(0, 4):
                 result = await self.login()
-                print('login returned result type {}'.format(type(result)))
                 macaroonJSON = result.get('discharge-required')
                 if macaroonJSON is None:
                     self.info = result['response']
@@ -476,7 +470,6 @@ class Connection:
                 await self.close()
 
     async def _connect_with_redirect(self, endpoints):
-        print('XXX _connect_with_redirect {}'.format(endpoints))
         try:
             login_result = await self._connect_with_login(endpoints)
         except JujuAPIError as e:

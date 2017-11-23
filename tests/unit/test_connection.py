@@ -41,7 +41,6 @@ async def test_out_of_order(event_loop):
         {'request-id': 2},
         {'request-id': 3},
     ]
-    print('XXX test_out_of_order')
     minimal_facades = [{'name':'Pinger','versions':[1]}]
     con = None
     try:
@@ -55,7 +54,6 @@ async def test_out_of_order(event_loop):
             ), \
             mock.patch('juju.client.connection.Connection._get_ssl'), \
             mock.patch('juju.client.connection.Connection._pinger', base.AsyncMock()):
-            print('XXX about to connect')
             con = await Connection.connect('0.1.2.3:999')
         actual_responses = []
         for i in range(3):

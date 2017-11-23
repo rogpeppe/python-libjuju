@@ -68,10 +68,10 @@ class JujuData:
         if '/' not in model_name:
             # model name doesn't include a user prefix, so add one
             # by using the current user for the controller.
-            accounts = self.accounts().get('controller_name')
+            accounts = self.accounts().get(controller_name)
             if accounts is None:
-                raise JujuError('No account found for controller {}'.format(controller_name))
-            username = accounts.get['user']
+                raise JujuError('No account found for controller {} '.format(controller_name))
+            username = accounts.get('user')
             if username is None:
                 raise JujuError('No username found for controller {}'.format(controller_name))
             model_name = username + "/" + model_name

@@ -121,7 +121,7 @@ async def test_relate(event_loop):
 
 async def _deploy_in_loop(new_loop, model_name):
     new_model = Model(new_loop)
-    await new_model.connect_model(model_name)
+    await new_model.connect(model_name)
     try:
         await new_model.deploy('cs:xenial/ubuntu')
         assert 'ubuntu' in new_model.applications
