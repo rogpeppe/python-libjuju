@@ -25,9 +25,7 @@ async def test_monitor(event_loop):
 async def test_monitor_catches_error(event_loop):
 
     async with base.CleanModel() as model:
-        print('CleanModel returned model type {}'.format(type(model)))
         conn = model.connection()
-        print('connection type is {}'.format(conn))
 
         assert conn.monitor.status == 'connected'
         try:
@@ -60,7 +58,6 @@ async def test_full_status(event_loop):
 async def test_reconnect(event_loop):
     async with base.CleanModel() as model:
         endpoint, kwargs = model.connection().connect_params()
-        print('connect_params; endpoint {}; kwargs {}'.format(endpoint, kwargs))
         conn = await Connection.connect(endpoint, **kwargs)
         try:
             await asyncio.sleep(0.1)

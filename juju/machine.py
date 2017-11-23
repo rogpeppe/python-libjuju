@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import os
-import sys
 
 import pyrfc3339
 
@@ -176,11 +175,8 @@ class Machine(model.ModelEntity):
         ]
         cmd += scp_opts.split()
         loop = self.model.loop
-        print('starting scp: {}; loop {}'.format(cmd, id(loop)))
-        print('default event loop: {}'.format( id(asyncio.get_event_loop())))
         process = await asyncio.create_subprocess_exec(*cmd, loop=loop)
         await process.wait()
-        print('scp finished; returncode {}', process.returncode)
         if process.returncode != 0:
             raise JujuError("command failed: %s" % cmd)
 

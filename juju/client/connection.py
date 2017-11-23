@@ -274,7 +274,7 @@ class Connection:
         if "version" not in msg:
             msg['version'] = self.facades[msg['type']]
         outgoing = json.dumps(msg, indent=2, cls=encoder)
-        print('{} -> {}'.format(id(self), outgoing))
+        log.debug('connection {} -> {}'.format(id(self), outgoing))
         for attempt in range(3):
             try:
                 await self.ws.send(outgoing)
@@ -289,7 +289,7 @@ class Connection:
                 # and we don't want the reconnect to be aborted halfway through
                 await asyncio.wait([self.reconnect()], loop=self.loop)
         result = await self._recv(msg['request-id'])
-        print('{} <- {}'.format(id(self), result))
+        log.debug('connection {} <- {}'.format(id(self), result))
 
         if not result:
             return result
@@ -372,7 +372,7 @@ class Connection:
 
         """
         endpoint, kwargs = self.connect_params()
-        
+
         return await Connection.connect(endpoint, **kwargs)
 
     def connect_params(self):
@@ -381,6 +381,8 @@ class Connection:
         if specified. The first element in the returned tuple holds the endpoint argument; the other
         holds a dict of the keyword args.
         """
+        # TODO if the connect method took all keyword arguments then this could
+        # be simpler and just return a dict rather than a tuple.
         return (
             self.endpoint, {
                 'uuid': self.uuid,
@@ -392,7 +394,7 @@ class Connection:
                 'max_frame_size': self.max_frame_size,
             }
         )
-                   
+
     async def controller(self):
         """Return a Connection to the controller at self.endpoint
         """

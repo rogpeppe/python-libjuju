@@ -441,7 +441,7 @@ class Model:
         await self.disconnect()
         await self._connector.connect_model(model_name)
         await self._after_connect()
- 
+
     async def _connect_direct(self, *args, **kwargs):
         await self.disconnect()
         await self._connector.connect(*args, **kwargs)

@@ -91,7 +91,7 @@ class Connector:
         endpoint = controller['api-endpoints'][0]
         models = self.jujudata.models()[controller_name]
         account = self.jujudata.accounts()[controller_name]
-        
+
         # TODO if there's no record for the required model name, connect
         # to the controller to find out the model's uuid, then connect
         # to that. This will let connect_model work with models that

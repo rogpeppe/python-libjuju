@@ -45,7 +45,6 @@ async def test_status(event_loop):
 async def test_scp(event_loop):
     async with base.CleanModel() as model:
         logging.basicConfig(level=logging.DEBUG)
-        print('model loop is {}'.format(id(model.loop)))
         await model.add_machine()
         await asyncio.wait_for(
             model.block_until(lambda: model.machines),
@@ -59,12 +58,8 @@ async def test_scp(event_loop):
         with NamedTemporaryFile() as f:
             f.write(b'testcontents')
             f.flush()
-            print('scp_to {} -> {}'.format(f.name, 'testfile'))
             await machine.scp_to(f.name, 'testfile')
-            print('scp_to complete')
 
         with NamedTemporaryFile() as f:
-            print('scp_from {} -> {}'.format('testfile', f.name))
             await machine.scp_from('testfile', f.name)
             assert f.read() == b'testcontents'
-            print('scp_from complete')
